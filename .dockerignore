@@ -1,0 +1,10 @@
+.git
+.github
+.gitignore
+archive/
+ex files/
+*.md
+.skill-shots/
+docker-compose*.yml
+Dockerfile
+.dockerignore

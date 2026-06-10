@@ -1,20 +1,93 @@
-name: Deploy to Droplet
+name: Build & Deploy Portfolio
 
 on:
   push:
-    branches:
-      - master
+    branches: [master]
+  workflow_dispatch:
+
+# Never let two deploys race each other; a newer push cancels an older run.
+concurrency:
+  group: deploy-portfolio
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/portfolio
 
 jobs:
+  # 1) Build the Docker image off-server and push to GHCR.
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lowercase image name
+        id: img
+        run: echo "name=$(echo $IMAGE | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.img.outputs.name }}:latest
+            ${{ steps.img.outputs.name }}:${{ github.sha }}
+
+  # 2) SSH into the droplet and roll the new image.
   deploy:
+    needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: SSH and Deploy
-        uses: appleboy/ssh-action@v1.0.0
+      - uses: actions/checkout@v4
+
+      # Third-party actions pinned to commit SHAs (tags are mutable — a
+      # hijacked tag could exfiltrate the SSH key; see tj-actions incident).
+      - name: Copy compose file to droplet
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634 # v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: docker-compose.yml
+          target: /opt/portfolio
+
+      - name: Pull & restart on droplet
+        uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17 # v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            cd /var/www/myportfolio
-            git pull origin master
+            set -e
+            cd /opt/portfolio
+            # IMAGE_TAG pins the exact build; rollback = set a previous SHA here.
+            printf 'PORTFOLIO_DOMAIN=%s\nIMAGE_TAG=%s\n' \
+              "${{ secrets.PORTFOLIO_DOMAIN }}" "${{ github.sha }}" > .env
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ secrets.GHCR_USER }} --password-stdin
+            docker compose pull
+            docker compose up -d
+            # Verify the container actually comes up healthy — otherwise a
+            # broken image would still leave the workflow green.
+            status=starting
+            for i in $(seq 1 12); do
+              status=$(docker inspect --format='{{.State.Health.Status}}' portfolio 2>/dev/null || echo starting)
+              if [ "$status" = "healthy" ]; then
+                echo "deploy OK — portfolio is healthy"
+                docker image prune -f
+                exit 0
+              fi
+              sleep 5
+            done
+            echo "deploy FAILED — container status: $status"
+            docker logs --tail 50 portfolio || true
+            exit 1

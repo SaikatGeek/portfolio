@@ -1,0 +1,43 @@
+# Production compose — runs ON the droplet.
+# Pulls the prebuilt image from GHCR (GitHub Actions builds it, the droplet
+# only runs it). TLS is terminated at the Cloudflare edge; cloudflared tunnels
+# traffic to Traefik, and Traefik routes to this container by Host header.
+#
+# Requires the shared external network created by the central infra stack
+# (traefik + cloudflared):  docker network create web
+#
+# Set PORTFOLIO_DOMAIN and IMAGE_TAG in a .env file next to this compose, e.g.
+#   PORTFOLIO_DOMAIN=saikat.dev
+#   IMAGE_TAG=<git sha>          ← written by CI on every deploy
+#
+# Rollback = put a previous git SHA in IMAGE_TAG and `docker compose up -d`.
+
+services:
+  portfolio:
+    image: ghcr.io/saikatgeek/portfolio:${IMAGE_TAG:-latest}
+    container_name: portfolio
+    restart: unless-stopped
+    mem_limit: 64m
+    cpus: "0.25"
+    networks:
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.portfolio.rule=Host(`${PORTFOLIO_DOMAIN}`)"
+      - "traefik.http.routers.portfolio.entrypoints=web"
+      - "traefik.http.services.portfolio.loadbalancer.server.port=80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  web:
+    external: true

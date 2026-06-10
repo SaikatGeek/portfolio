@@ -1,0 +1,10 @@
+# Local testing only — builds the image from source and serves on
+# http://localhost:8080 . No Traefik / Cloudflare involved.
+#   docker compose -f docker-compose.local.yml up --build
+
+services:
+  portfolio:
+    build: .
+    container_name: portfolio-local
+    ports:
+      - "8080:80"
