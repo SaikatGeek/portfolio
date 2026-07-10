@@ -6,3 +6,9 @@ ex files/
 
 # secrets — .env is generated on the droplet by CI, never committed
 .env
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
