@@ -3,3 +3,6 @@
 
 # local scratch / old experiments — not part of the site
 ex files/
+
+# secrets — .env is generated on the droplet by CI, never committed
+.env
